@@ -212,12 +212,15 @@ if opt.log_server != "":
     experiment = cc.create_experiment(opt.experiment_name)
 
 
-def eval(model, criterion, data):
+def eval(model, criterion, val_data):
+    print('evaluating ...')
     stats = onmt.Loss.Statistics()
     model.eval()
     loss = onmt.Loss.MemoryEfficientLoss(opt, model.generator, criterion, eval=True, copy_loss=opt.copy_attn)
-    for i in range(len(data)):
-        batch = data[i]
+    for i in range(len(val_data)):
+        if i % 10 == 0: 
+            print('{0} / {1}'.format(i, len(val_data))) 
+        batch = val_data[i]
         outputs, attn, dec_hidden = model(batch.src, batch.tgt, batch.lengths)
         batch_stats, _, _ = loss.loss(batch, outputs, attn)
         stats.update(batch_stats)
@@ -226,27 +229,28 @@ def eval(model, criterion, data):
     return stats
 
 
-def train(model, criterion, trainData, optim, epoch):
+def train(model, criterion, train_data, optim, epoch):
+    print('training ... ')
     model.train()
 
     # shuffule data 
     if opt.extra_shuffle and epoch > opt.curriculum:
-        trainData.shuffle()
+        train_data.shuffle()
 
     mem_loss = onmt.Loss.MemoryEfficientLoss(opt, model.generator, criterion, copy_loss=opt.copy_attn)
     # Shuffle mini batch order.
-    batchOrder = torch.randperm(len(trainData))
+    batchOrder = torch.randperm(len(train_data))
 
     total_stats = onmt.Loss.Statistics()
     report_stats = onmt.Loss.Statistics()
     # debug_here()
-    for i in range(len(trainData)):
+    for i in range(len(train_data)):
 
         if i % 10 == 0:
-            print('{0} / {1}'.format(i, len(trainData))) 
+            print('{0} / {1}'.format(i, len(train_data))) 
             
         batchIdx = batchOrder[i] if epoch > opt.curriculum else i
-        batch = trainData[batchIdx]
+        batch = train_data[batchIdx]
         target_size = batch.tgt.size(0)
 
         dec_state = None
@@ -271,7 +275,7 @@ def train(model, criterion, trainData, optim, epoch):
             report_stats.n_src_words += batch.lengths.data.sum()
 
             if i % opt.log_interval == -1 % opt.log_interval:
-                report_stats.output(epoch, i+1, len(trainData),
+                report_stats.output(epoch, i+1, len(train_data),
                                     total_stats.start_time)
                 if opt.log_server:
                     report_stats.log("progress", experiment, optim)
@@ -435,8 +439,10 @@ def main():
         model_state_dict = {k: v for k, v in model_state_dict.items() if 'generator' not in k}
         generator_state_dict = (model.generator.module.state_dict() if  opt.ngpu > 1 else model.generator.state_dict())
 
+        print('current best ppl {0}'.format(best_ppl))
         if epoch >= opt.start_checkpoint_at and best_ppl < valid_stats.ppl():
             best_ppl = valid_stats.ppl()
+            print('savding checkpoint ... ')
             checkpoint = {
                 'model': model_state_dict,
                 'generator': generator_state_dict,
